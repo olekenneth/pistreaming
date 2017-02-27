@@ -16,16 +16,17 @@ import picamera
 from ws4py.websocket import WebSocket
 from ws4py.server.wsgirefserver import WSGIServer, WebSocketWSGIRequestHandler
 from ws4py.server.wsgiutils import WebSocketWSGIApplication
+from PIL import Image
 
 ###########################################
 # CONFIGURATION
-WIDTH = 640
-HEIGHT = 480
+WIDTH = 1280
+HEIGHT = 960
 FRAMERATE = 24
 HTTP_PORT = 8082
 WS_PORT = 8084
 COLOR = u'#444'
-BGCOLOR = u'#333'
+BGCOLOR = u'#fff'
 JSMPEG_MAGIC = b'jsmp'
 JSMPEG_HEADER = Struct('>4sHH')
 ###########################################
@@ -44,6 +45,14 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
         elif self.path == '/jsmpg.js':
             content_type = 'application/javascript'
             content = self.server.jsmpg_content
+        elif self.path == '/cam.jpg':
+            content = self.server.update_jpg_content()
+            content_type = 'image/jpeg'
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.end_headers()
+            self.wfile.write(content)
+            return
         elif self.path == '/index.html':
             content_type = 'text/html; charset=utf-8'
             tpl = Template(self.server.index_template)
@@ -64,7 +73,8 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
 
 
 class StreamingHttpServer(HTTPServer):
-    def __init__(self):
+    def __init__(self, camera):
+        self.camera = camera
         super(StreamingHttpServer, self).__init__(
                 ('', HTTP_PORT), StreamingHttpHandler)
         with io.open('index.html', 'r') as f:
@@ -72,6 +82,10 @@ class StreamingHttpServer(HTTPServer):
         with io.open('jsmpg.js', 'r') as f:
             self.jsmpg_content = f.read()
 
+    def update_jpg_content(self):
+        stream = io.BytesIO()
+        self.camera.capture(stream, 'jpeg')
+        return stream.getvalue()
 
 class StreamingWebSocket(WebSocket):
     def opened(self):
@@ -137,7 +151,7 @@ def main():
         websocket_server.initialize_websockets_manager()
         websocket_thread = Thread(target=websocket_server.serve_forever)
         print('Initializing HTTP server on port %d' % HTTP_PORT)
-        http_server = StreamingHttpServer()
+        http_server = StreamingHttpServer(camera)
         http_thread = Thread(target=http_server.serve_forever)
         print('Initializing broadcast thread')
         output = BroadcastOutput(camera)
