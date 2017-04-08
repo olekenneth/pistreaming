@@ -12,6 +12,7 @@ from time import sleep, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from wsgiref.simple_server import make_server
 
+import RPi.GPIO as GPIO
 import picamera
 from ws4py.websocket import WebSocket
 from ws4py.server.wsgirefserver import WSGIServer, WebSocketWSGIRequestHandler
@@ -26,9 +27,10 @@ FRAMERATE = 24
 HTTP_PORT = 8082
 WS_PORT = 8084
 COLOR = u'#444'
-BGCOLOR = u'#fff'
+BGCOLOR = u'#000'
 JSMPEG_MAGIC = b'jsmp'
 JSMPEG_HEADER = Struct('>4sHH')
+GPIO_PIN=21
 ###########################################
 
 
@@ -45,13 +47,37 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
         elif self.path == '/jsmpg.js':
             content_type = 'application/javascript'
             content = self.server.jsmpg_content
+        elif self.path == '/cam.mjpg':
+            self.send_response(200)
+            self.send_header('Content-type','multipart/x-mixed-replace; boundary=--jpgboundary')
+            self.end_headers()
+            try:
+                while True:
+                    GPIO.output(GPIO_PIN, 1)
+                    sleep(0.1)
+                    stream = self.server.update_jpg_content()
+                    self.wfile.write("--jpgboundary\n".encode('UTF-8'))
+                    self.send_header('Content-type','image/jpeg')
+                    self.send_header('Content-length', len(stream.getvalue()))
+                    self.end_headers()
+                    self.wfile.write(stream.getvalue())
+                    stream.seek(0)
+                    stream.truncate()
+                    GPIO.output(GPIO_PIN, 0)
+                    sleep(0.5)
+            except KeyboardInterrupt:
+                pass
+            return
         elif self.path == '/cam.jpg':
-            content = self.server.update_jpg_content()
+            GPIO.output(GPIO_PIN, 1)
+            sleep(0.2)
+            stream = self.server.update_jpg_content()
             content_type = 'image/jpeg'
             self.send_response(200)
             self.send_header('Content-Type', content_type)
             self.end_headers()
-            self.wfile.write(content)
+            self.wfile.write(stream.getvalue())
+            GPIO.output(GPIO_PIN, 0)
             return
         elif self.path == '/index.html':
             content_type = 'text/html; charset=utf-8'
@@ -85,7 +111,7 @@ class StreamingHttpServer(HTTPServer):
     def update_jpg_content(self):
         stream = io.BytesIO()
         self.camera.capture(stream, 'jpeg')
-        return stream.getvalue()
+        return stream
 
 class StreamingWebSocket(WebSocket):
     def opened(self):
@@ -137,10 +163,14 @@ class BroadcastThread(Thread):
 
 
 def main():
+    print('Setting up GPIO ' + str(GPIO_PIN) + ' IR LED')
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(GPIO_PIN, GPIO.OUT)
     print('Initializing camera')
     with picamera.PiCamera() as camera:
         camera.resolution = (WIDTH, HEIGHT)
         camera.framerate = FRAMERATE
+        camera.led = False
         sleep(1) # camera warm-up time
         print('Initializing websockets server on port %d' % WS_PORT)
         websocket_server = make_server(
