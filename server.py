@@ -11,6 +11,7 @@ from threading import Thread
 from time import sleep, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from wsgiref.simple_server import make_server
+from fractions import Fraction
 
 import picamera
 from PIL import Image
@@ -19,7 +20,9 @@ from PIL import Image
 # CONFIGURATION
 WIDTH = 1280
 HEIGHT = 960
-FRAMERATE = 24
+FRAMERATE = 10
+SHUTTERSPEED = 2000000
+ISO = 1200
 HTTP_PORT = 8082
 WS_PORT = 8084
 COLOR = u'#444'
@@ -100,6 +103,9 @@ def main():
     with picamera.PiCamera() as camera:
         camera.resolution = (WIDTH, HEIGHT)
         camera.framerate = FRAMERATE
+        camera.shutter_speed = SHUTTERSPEED
+        camera.iso = ISO
+        # camera.exposure_mode = 'off'
         camera.led = False
         #camera.vflip = True
         sleep(1) # camera warm-up time
