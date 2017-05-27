@@ -12,23 +12,37 @@ from time import sleep, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from wsgiref.simple_server import make_server
 from fractions import Fraction
+import RPi.GPIO as GPIO
+import datetime as dt
 
 import picamera
 from PIL import Image
 
+def in_between(now, start, end):
+    if start <= end:
+        return start <= now < end
+    else: # over midnight e.g., 23:30-04:15
+        return start <= now or now < end
+
 ###########################################
-# CONFIGURATION
+# CONFIGURATION # VALUES IN NIGHTMODE
+if in_between(dt.datetime.now().time(), dt.time(4), dt.time(17)):
+    TIME = 'Day'
+    FRAMERATE = 24
+    SHUTTERSPEED = 20000
+    ISO = 100
+else:
+    TIME = 'Night'
+    FRAMERATE = 5
+    SHUTTERSPEED = 2000000
+    ISO = 800
+
 WIDTH = 1280
 HEIGHT = 960
-FRAMERATE = 10
-SHUTTERSPEED = 2000000
-ISO = 1200
 HTTP_PORT = 8082
 WS_PORT = 8084
-COLOR = u'#444'
-BGCOLOR = u'#000'
-JSMPEG_MAGIC = b'jsmp'
-JSMPEG_HEADER = Struct('>4sHH')
+
+GPIO_PIN=21
 ###########################################
 
 
@@ -47,19 +61,20 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type','multipart/x-mixed-replace; boundary=--jpgboundary')
             self.end_headers()
             try:
-                while True:
-                    sleep(0.1)
+                ok = 1
+                while ok < 30:
                     stream = self.server.update_jpg_content()
                     self.wfile.write("--jpgboundary\n".encode('UTF-8'))
                     self.send_header('Content-type','image/jpeg')
                     self.send_header('Content-length', len(stream.getvalue()))
                     self.end_headers()
                     self.wfile.write(stream.getvalue())
-                    stream.seek(0)
-                    stream.truncate()
-                    sleep(0.5)
+                    sleep(2)
+                    ok = ok + 1
+                return
             except:
-                pass
+                print('Closing mjpeg')
+                return
             return
         elif self.path == '/cam.jpg':
             stream = self.server.update_jpg_content()
@@ -68,7 +83,6 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', content_type)
             self.end_headers()
             self.wfile.write(stream.getvalue())
-            stream.truncate()
             return
         else:
             self.send_error(404, 'File not found')
@@ -84,8 +98,8 @@ class StreamingHttpHandler(BaseHTTPRequestHandler):
 
 
 class StreamingHttpServer(HTTPServer):
-    def __init__(self, camera):
-        self.camera = camera
+    def __init__(self, stream):
+        self.stream = stream
         super(StreamingHttpServer, self).__init__(
                 ('', HTTP_PORT), StreamingHttpHandler)
         with io.open('index.html', 'r') as f:
@@ -94,11 +108,12 @@ class StreamingHttpServer(HTTPServer):
             self.jsmpg_content = f.read()
 
     def update_jpg_content(self):
-        stream = io.BytesIO()
-        self.camera.capture(stream, 'jpeg')
-        return stream
+        return self.stream;
 
 def main():
+    print('Setting up GPIO ' + str(GPIO_PIN) + ' IR LED')
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(GPIO_PIN, GPIO.OUT)    
     print('Initializing camera')
     with picamera.PiCamera() as camera:
         camera.resolution = (WIDTH, HEIGHT)
@@ -108,15 +123,30 @@ def main():
         # camera.exposure_mode = 'off'
         camera.led = False
         #camera.vflip = True
+        #camera.hflip = True
+        # camera.annotate_background = picamera.Color('black')
         sleep(1) # camera warm-up time
         print('Initializing HTTP server on port %d' % HTTP_PORT)
-        http_server = StreamingHttpServer(camera)
+        stream = io.BytesIO()
+        http_server = StreamingHttpServer(stream)
         http_thread = Thread(target=http_server.serve_forever)
         try:
             print('Starting HTTP server thread')
             http_thread.start()
             while True:
-                sleep(1)
+                tempStream = io.BytesIO()
+                # print('Capture from camera' + dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                GPIO.output(GPIO_PIN, 1)
+                sleep(0.01)
+                tempStream.seek(0)
+                tempStream.truncate()
+                camera.annotate_text = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ' ' + TIME
+                camera.capture(tempStream, 'jpeg')
+                stream.seek(0)
+                stream.truncate()
+                stream.write(tempStream.getvalue())
+                GPIO.output(GPIO_PIN, 0)
+                sleep(2)
         except KeyboardInterrupt:
             pass
         finally:
